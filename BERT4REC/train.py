@@ -8,7 +8,7 @@ from lit_model import BERT4REC
 # Lightning
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import TensorBoardLogger # 로그 시각화
-from pytorch_lightning.callbacks import EarlyStopping, LearningRateMonitor
+from pytorch_lightning.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 
 def _setup_parser():
     """
@@ -89,13 +89,20 @@ def main():
         logging_interval = args.logging_interval
     )
 
+    checkpoint = ModelCheckpoint(
+    monitor    = 'val_loss',
+    mode       = 'min',
+    save_top_k = 1,
+    filename   = 'best'
+    )
+
     # 변경
     trainer = Trainer(
         max_epochs             = args.max_epochs,
         gradient_clip_val      = args.gradient_clip_val,
         gradient_clip_algorithm= args.gradient_clip_algorithm,
         logger                 = logger,
-        callbacks              = [early_stop, lr_monitor],
+        callbacks              = [early_stop, lr_monitor, checkpoint],
         accelerator            = 'gpu',
         devices                = 1,
     )
@@ -104,7 +111,7 @@ def main():
     trainer.fit(lit_model, datamodule=data)
 
     # 테스트 
-    trainer.test(lit_model, datamodule=data)
+    trainer.test(lit_model, datamodule=data, ckpt_path='best')
 
 
 if __name__ == "__main__":
