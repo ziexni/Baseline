@@ -44,7 +44,7 @@ def _set_trainer_args(args):
     # Early Stopping 기준 
     args.monitor = "val_loss"    # 이 값 기준으로 best 판단
     args.mode = "min"            # 낮을수록 좋음
-    args.patience = 5           # 10 epoch 동안 개선 없으면 종료
+    args.patience = 5            # 5 epoch 동안 개선 없으면 종료
 
     # logging 설정 
     args.logging_interval = "step"  # step 단위로 로그 기록
