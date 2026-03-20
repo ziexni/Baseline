@@ -33,7 +33,7 @@ def _set_trainer_args(args):
     """
 
     # 기본 학습 설정
-    args.max_epochs = 200                 # 최대 epoch 
+    args.max_epochs = 100                 # 최대 epoch 
     args.gradient_clip_val = 5.0          # gradient clipping (폭주 방지)
     args.gradient_clip_algorithm = "norm" # L2 Norm 기반 clipping
 
@@ -44,7 +44,7 @@ def _set_trainer_args(args):
     # Early Stopping 기준 
     args.monitor = "val_loss"    # 이 값 기준으로 best 판단
     args.mode = "min"            # 낮을수록 좋음
-    args.patience = 10           # 10 epoch 동안 개선 없으면 종료
+    args.patience = 5           # 10 epoch 동안 개선 없으면 종료
 
     # logging 설정 
     args.logging_interval = "step"  # step 단위로 로그 기록
