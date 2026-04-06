@@ -9,6 +9,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset # Pytorch에게 내 데이터를 정의해 주기 위한 클래스
 from collections import defaultdict
+import pickle
 
 def get_data(interaction_path):
     """
@@ -17,16 +18,18 @@ def get_data(interaction_path):
         user_train, user_valid, user_test : [(item_id)]
         usernum, itemnum
     """
-    df = pd.read_parquet(interaction_path)
+    with open('bigMatrix.pkl', 'rb') as f:
+        df = pickle.load(f)
+
     df['user_id'] = df['user_id'] + 1
-    df['item_id'] = df['item_id'] + 1
+    df['video_id'] = df['video_id'] + 1
     df = df.sort_values(by=['user_id', 'timestamp'], kind='mergesort').reset_index(drop=True)
 
     usernum = df['user_id'].max()
-    itemnum = df['item_id'].max()
+    itemnum = df['video_id'].max()
 
     User = defaultdict(list)
-    for u, i in zip(df['user_id'], df['item_id']):
+    for u, i in zip(df['user_id'], df['video_id']):
        User[u].append(int(i))
 
     user_train, user_valid, user_test = {}, {}, {}
