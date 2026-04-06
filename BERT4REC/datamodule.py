@@ -109,10 +109,10 @@ class DataModule(pl.LightningDataModule):
         """
         CLI에서 사용할 argument 정의
         """
-        parser.add_argument('--max_len',         type=int,   default=100)   # sequence 길이
+        parser.add_argument('--max_len',         type=int,   default=50)   # sequence 길이
         parser.add_argument('--mask_prob',       type=float, default=0.2)   # masking 비율
         parser.add_argument('--neg_sample_size', type=int,   default=100)   # negative 샘플 수
-        parser.add_argument('--batch_size',      type=int,   default=64)   # batch size
+        parser.add_argument('--batch_size',      type=int,   default=256)   # batch size
         parser.add_argument('--pin_memory',      type=bool,  default=True)  # GPU 최적화
         parser.add_argument('--num_workers',     type=int,   default=4)     # dataloader worker
         parser.add_argument('--item_size',       type=int,   default=0)     # item vocab size (나중에 덮어씀)
