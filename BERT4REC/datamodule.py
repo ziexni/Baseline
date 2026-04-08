@@ -9,7 +9,7 @@ from typing import Optional
 from data import MicroVideoDataset, get_data
 
 # 기본 interaction 데이터 경로
-INTERACTION_PATH = 'datasets/interaction.parquet'
+INTERACTION_PATH = 'kuaishou_preprocess.pkl'
 
 class DataModule(pl.LightningDataModule):
     def __init__(self, args):
