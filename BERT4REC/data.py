@@ -18,7 +18,7 @@ def get_data(interaction_path):
         user_train, user_valid, user_test : [(item_id)]
         usernum, itemnum
     """
-    with open('kuaishou_preprocess.pkl', 'rb') as f:
+    with open(interaction_path, 'rb') as f:
         df = pickle.load(f)
 
     df['user_id'] = df['user_id'] + 1
