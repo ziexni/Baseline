@@ -101,7 +101,7 @@ def main():
         max_epochs             = args.max_epochs,
         gradient_clip_val      = args.gradient_clip_val,
         gradient_clip_algorithm= args.gradient_clip_algorithm,
-        check_val_every_n_epoch = 20,
+        check_val_every_n_epoch = 5,
         logger                 = logger,
         callbacks              = [early_stop, lr_monitor, checkpoint],
         accelerator            = 'gpu',
