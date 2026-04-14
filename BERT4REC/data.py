@@ -95,48 +95,39 @@ class MicroVideoDataset(Dataset):
             return self._eval_item(u)
 
     def _train_item(self, u):
-        seq   = self.user_train[u]
-        rated = set(self.user_train[u])
-        tokens, pos_labels, neg_labels = [], [], []
+        seq    = self.user_train[u]
+        tokens, pos_labels = [], []
     
         for item in seq:
             prob = random.random()
             if prob < self.mask_prob:
-                # ✅ 80/10/10 규칙
                 inner = random.random()
                 if inner < 0.8:
-                    tokens.append(self.mask_token)       # 80%: MASK
+                    tokens.append(self.mask_token)
                 elif inner < 0.9:
-                    tokens.append(item)                  # 10%: 원래 아이템 유지
+                    tokens.append(item)
                 else:
-                    rand_item = np.random.randint(1, self.itemnum + 1)
-                    tokens.append(rand_item)             # 10%: 랜덤 교체
-    
+                    tokens.append(np.random.randint(1, self.itemnum + 1))
                 pos_labels.append(item)
-                neg = np.random.randint(1, self.itemnum + 1)
-                while neg in rated:
-                    neg = np.random.randint(1, self.itemnum + 1)
-                neg_labels.append(neg)
             else:
                 tokens.append(item)
                 pos_labels.append(0)
-                neg_labels.append(0)
     
         tokens     = tokens[-self.maxlen:]
         pos_labels = pos_labels[-self.maxlen:]
-        neg_labels = neg_labels[-self.maxlen:]
     
         pad_len    = self.maxlen - len(tokens)
         tokens     = [0] * pad_len + tokens
         pos_labels = [0] * pad_len + pos_labels
-        neg_labels = [0] * pad_len + neg_labels
+    
+        # ✅ neg 자리는 dummy 0 — dataloader 구조 유지
+        neg_dummy = [0] * self.maxlen
     
         return (
             torch.LongTensor(tokens),
             torch.LongTensor(pos_labels),
-            torch.LongTensor(neg_labels)
+            torch.LongTensor(neg_dummy)
         )
-
 
     def _eval_item(self, u):
         train_seq = self.user_train.get(u, [])
