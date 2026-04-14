@@ -96,36 +96,41 @@ class MicroVideoDataset(Dataset):
             return self._train_item(u)
         else:
             return self._eval_item(u)
-
+    
     def _train_item(self, u):
         seq    = self.user_train[u]
         tokens = []
         labels = []
-
-        for item in seq:
-            if random.random() < self.mask_prob:
-                # ✅ 원본 레포와 동일: MASK 토큰만 사용
-                tokens.append(self.mask_token)
-                labels.append(item)
+    
+        for s in seq:
+            prob = random.random()
+            if prob < self.mask_prob:
+                # ✅ 원본과 동일: prob normalize 후 80/10/10
+                prob /= self.mask_prob
+                if prob < 0.8:
+                    tokens.append(self.mask_token)
+                elif prob < 0.9:
+                    tokens.append(random.randint(1, self.itemnum))
+                else:
+                    tokens.append(s)
+                labels.append(s)
             else:
-                tokens.append(item)
-                labels.append(0)   # 0 = ignore (CE loss ignore_index=0)
-
-        # maxlen으로 자르기 (최근 시퀀스 유지)
+                tokens.append(s)
+                labels.append(0)
+    
         tokens = tokens[-self.maxlen:]
         labels = labels[-self.maxlen:]
-
-        # 앞을 0으로 padding
+    
         pad_len = self.maxlen - len(tokens)
         tokens  = [0] * pad_len + tokens
         labels  = [0] * pad_len + labels
-
-        # neg 자리는 dummy 0 (CE loss라 사용 안 함, dataloader 구조 유지)
+    
+        # ✅ 원본과 동일: 2개만 반환
         return (
             torch.LongTensor(tokens),
-            torch.LongTensor(labels),
-            torch.LongTensor([0] * self.maxlen)
+            torch.LongTensor(labels)
         )
+
 
     def _eval_item(self, u):
         train_seq = self.user_train.get(u, [])
