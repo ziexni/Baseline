@@ -4,6 +4,15 @@ import torch.nn as nn
 
 from bert import BERT
 
+def evaluate_batch(scores):
+    rank = scores.argsort(dim=1, descending=True).argsort(dim=1)[:, 0]
+
+    hr = (rank < 10).float().mean()
+    ndcg = (1.0 / torch.log2(rank.float() + 2)).mean()
+    mrr = (1.0 / (rank.float() + 1)).mean()
+
+    return hr, ndcg, mrr
+
 
 class BERT4REC(pl.LightningModule):
     def __init__(self, args):
@@ -62,43 +71,26 @@ class BERT4REC(pl.LightningModule):
     # -------------------------
     # EVAL METRICS (SAME AS AMPREC)
     # -------------------------
-    @staticmethod
-    def compute_metrics(scores):
-        # scores: (B, 101), index 0 = positive
-        rank = scores.argsort(dim=1, descending=True)
-
-        pos_rank = (rank == 0).nonzero(as_tuple=True)[1] + 1  # 1-based rank
-
-        hr = (pos_rank <= 10).float().mean()
-        mrr = (1.0 / pos_rank.float()).mean()
-        ndcg = (1.0 / torch.log2(pos_rank.float() + 1)).mean()
-
-        return hr, ndcg, mrr
-
     def validation_step(self, batch, batch_idx):
         seq, candidates, labels = batch
-
-        logits = self.model(seq)
-        preds = self.out(logits)[:, -1, :]
-
+    
+        preds = self.out(self.model(seq))[:, -1, :]
         scores = torch.gather(preds, 1, candidates)
-
-        hr, ndcg, mrr = self.compute_metrics(scores)
-
+    
+        hr, ndcg, mrr = evaluate_batch(scores)
+    
         self.log("HR_val", hr, prog_bar=True)
         self.log("NDCG_val", ndcg, prog_bar=True)
         self.log("MRR_val", mrr, prog_bar=True)
 
     def test_step(self, batch, batch_idx):
         seq, candidates, labels = batch
-
-        logits = self.model(seq)
-        preds = self.out(logits)[:, -1, :]
-
+    
+        preds = self.out(self.model(seq))[:, -1, :]
         scores = torch.gather(preds, 1, candidates)
-
-        hr, ndcg, mrr = self.compute_metrics(scores)
-
+    
+        hr, ndcg, mrr = evaluate_batch(scores)
+    
         self.log("HR_test", hr)
         self.log("NDCG_test", ndcg)
         self.log("MRR_test", mrr)
