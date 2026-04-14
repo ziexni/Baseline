@@ -358,7 +358,7 @@ class BERT4REC(pl.LightningModule):
 
         # top-10 추천
 
-        indexes, _ = torch.topk(preds, 10)
+        _, indexes = torch.topk(preds, 10)
 
 
 
