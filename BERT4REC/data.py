@@ -43,19 +43,6 @@ def get_data(interaction_path):
 
 
 class MicroVideoDataset(Dataset):
-    """
-    BERT4Rec Cloze task Dataset
-
-    [ 토큰 규칙 ]
-    PAD  = 0
-    item = 1 ~ itemnum
-    MASK = itemnum + 1
-
-    [ mode ]
-    'train'       : random masking → (seq, pos_labels, dummy_neg)
-    'valid'/'test': 마지막 위치 MASK → (seq, candidates, labels)
-                    candidates[0] = 정답, candidates[1:] = negatives
-    """
     def __init__(self, user_train, user_valid, user_test,
                  itemnum, maxlen, mask_prob=0.2,
                  neg_sample_size=100, mode='train', usernum=0):
@@ -71,21 +58,38 @@ class MicroVideoDataset(Dataset):
         self.item_size       = itemnum
 
         if mode == 'train':
-            # 학습: 시퀀스 길이 2 이상인 전체 유저 (제한 없음)
-            self.users = [
-                u for u, seq in user_train.items()
-                if len(seq) >= 2
-            ]
+            self.users = [u for u, seq in user_train.items() if len(seq) >= 2]
+
         else:
             ref       = user_valid if mode == 'valid' else user_test
             all_users = [u for u in user_train if ref.get(u)]
-            # ✅ SASRec 맞춤: valid 1000명 / test 10000명
-            if mode == 'valid' and len(all_users) > 1000:
-                self.users = random.sample(all_users, 1000)
-            elif mode == 'test' and len(all_users) > 10000:
-                self.users = random.sample(all_users, 10000)
-            else:
-                self.users = all_users
+            self.users = all_users
+            # ✅ BERT4Rec 원본: 유저 수 제한 없음
+
+        # ✅ BERT4Rec 원본: neg을 사전에 고정 생성 (매번 재샘플링 X)
+        if mode in ('valid', 'test'):
+            self._precompute_negatives()
+
+    def _precompute_negatives(self):
+        """
+        원본 BERT4Rec: negative를 사전에 고정 생성
+        - valid: train items 제외
+        - test : train + valid 정답 제외  ← 핵심
+        """
+        self.user_negatives = {}
+        for u in self.users:
+            # ✅ BERT4Rec 원본: test 시 valid 정답도 rated에 포함
+            rated = set(self.user_train[u])
+            rated.add(0)
+            if self.mode == 'test':
+                rated.update(self.user_valid.get(u, []))  # valid 정답 제외
+
+            negs = []
+            while len(negs) < self.neg_sample_size:
+                t = np.random.randint(1, self.itemnum + 1)
+                if t not in rated:
+                    negs.append(t)
+            self.user_negatives[u] = negs
 
     def __len__(self):
         return len(self.users)
@@ -96,16 +100,16 @@ class MicroVideoDataset(Dataset):
             return self._train_item(u)
         else:
             return self._eval_item(u)
-    
+
     def _train_item(self, u):
         seq    = self.user_train[u]
         tokens = []
         labels = []
-    
+
         for s in seq:
             prob = random.random()
             if prob < self.mask_prob:
-                # ✅ 원본과 동일: prob normalize 후 80/10/10
+                # ✅ 원본 80/10/10
                 prob /= self.mask_prob
                 if prob < 0.8:
                     tokens.append(self.mask_token)
@@ -117,19 +121,47 @@ class MicroVideoDataset(Dataset):
             else:
                 tokens.append(s)
                 labels.append(0)
-    
+
         tokens = tokens[-self.maxlen:]
         labels = labels[-self.maxlen:]
-    
+
         pad_len = self.maxlen - len(tokens)
         tokens  = [0] * pad_len + tokens
         labels  = [0] * pad_len + labels
-    
-        # ✅ 원본과 동일: 2개만 반환
+
+        # ✅ 원본과 동일: 2개 반환
         return (
             torch.LongTensor(tokens),
             torch.LongTensor(labels)
         )
+
+    def _eval_item(self, u):
+        train_seq = self.user_train.get(u, [])
+
+        if self.mode == 'valid':
+            history = train_seq
+            target  = self.user_valid[u][0]
+        else:
+            # test: train + valid 포함
+            history = train_seq + self.user_valid.get(u, [])
+            target  = self.user_test[u][0]
+
+        item_seq = history[-(self.maxlen - 1):]
+        seq      = item_seq + [self.mask_token]
+        pad_len  = self.maxlen - len(seq)
+        seq      = [0] * pad_len + seq
+
+        # ✅ 사전 고정된 negatives 사용
+        negs       = self.user_negatives[u]
+        candidates = [target] + negs
+        labels     = [1] + [0] * self.neg_sample_size
+
+        return (
+            torch.LongTensor(seq),
+            torch.LongTensor(candidates),
+            torch.LongTensor(labels)
+        )
+
 
 
     def _eval_item(self, u):
