@@ -78,7 +78,7 @@ class BERT4REC(pl.LightningModule):
         preds = self.out(self.model(seq))[:, -1, :]
         scores = torch.gather(preds, 1, candidates)
     
-        hr, ndcg, mrr = evaluate_batch(scores)
+        hr, ndcg, mrr = self.evaluate_batch(scores)
     
         self.log("HR_val", hr, prog_bar=True)
         self.log("NDCG_val", ndcg, prog_bar=True)
@@ -90,7 +90,7 @@ class BERT4REC(pl.LightningModule):
         preds = self.out(self.model(seq))[:, -1, :]
         scores = torch.gather(preds, 1, candidates)
     
-        hr, ndcg, mrr = evaluate_batch(scores)
+        hr, ndcg, mrr = self.evaluate_batch(scores)
     
         self.log("HR_test", hr)
         self.log("NDCG_test", ndcg)
