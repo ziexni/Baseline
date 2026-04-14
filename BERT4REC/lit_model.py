@@ -9,6 +9,7 @@ from bert import BERT
 class BERT4REC(pl.LightningModule):
     def __init__(self, args):
         super().__init__()
+
         self.learning_rate     = args.learning_rate
         self.max_len           = args.max_len
         self.hidden_dim        = args.hidden_dim
@@ -16,12 +17,14 @@ class BERT4REC(pl.LightningModule):
         self.head_num          = args.head_num
         self.dropout_rate      = args.dropout_rate
         self.dropout_rate_attn = args.dropout_rate_attn
-        self.vocab_size        = args.item_size + 2
-        self.item_size         = args.item_size
-        self.weight_decay      = args.weight_decay
-        self.decay_step        = args.decay_step
-        self.gamma             = args.gamma
-        self.batch_size        = args.batch_size
+
+        self.vocab_size = args.item_size + 2
+        self.item_size  = args.item_size
+
+        self.weight_decay = args.weight_decay
+        self.decay_step   = args.decay_step
+        self.gamma        = args.gamma
+        self.batch_size   = args.batch_size
 
         self.model = BERT(
             vocab_size=self.vocab_size,
@@ -38,13 +41,16 @@ class BERT4REC(pl.LightningModule):
         self.out_bias = nn.Parameter(torch.zeros(self.item_size + 1))
 
     def _get_scores(self, hidden):
-        self.model.embedding.token_embeddings.weight[:self.item_size + 1]
+        """Weight tying: hidden @ token_emb.weight.T + bias"""
+        # ✅ 대입문 명시
+        emb_weight = self.model.embedding.token_embeddings.weight[:self.item_size + 1]
         return torch.matmul(hidden, emb_weight.T) + self.out_bias
 
     @staticmethod
     def evaluate_batch(scores):
+        """scores: (B, 101), candidates[0] = 정답"""
         rank     = scores.argsort(dim=1, descending=True).argsort(dim=1)
-        pos_rank = (rank == 0).nonzero(as_tuple=True)[1] + 1
+        pos_rank = (rank == 0).nonzero(as_tuple=True)[1] + 1   # 1-based
         hr   = (pos_rank <= 10).float().mean()
         ndcg = (1.0 / torch.log2(pos_rank.float() + 1)).mean()
         mrr  = (1.0 / pos_rank.float()).mean()
@@ -52,22 +58,27 @@ class BERT4REC(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         seq, pos, _ = batch
-        hidden = self.model(seq)
+
+        hidden = self.model(seq)            # (B, T, hidden)
         preds  = self._get_scores(hidden)   # (B, T, item_size+1)
 
+        # 원본 BERT4Rec: Cross-Entropy over full vocab
         loss = F.cross_entropy(
-            preds.view(-1, self.item_size + 1),
-            pos.view(-1),
-            ignore_index=0
+            preds.view(-1, self.item_size + 1),   # (B*T, vocab)
+            pos.view(-1),                          # (B*T,)
+            ignore_index=0                         # pad/non-masked 위치 무시
         )
+
         self.log("train_loss", loss, prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
         seq, candidates, _ = batch
+
         hidden = self.model(seq)
-        preds  = self._get_scores(hidden)[:, -1, :]
-        scores = torch.gather(preds, 1, candidates)
+        preds  = self._get_scores(hidden)[:, -1, :]   # (B, item_size+1)
+        scores = torch.gather(preds, 1, candidates)   # (B, 101)
+
         hr, ndcg, mrr = self.evaluate_batch(scores)
         self.log("HR_val",   hr,   prog_bar=True)
         self.log("NDCG_val", ndcg, prog_bar=True)
@@ -75,16 +86,17 @@ class BERT4REC(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         seq, candidates, _ = batch
+
         hidden = self.model(seq)
         preds  = self._get_scores(hidden)[:, -1, :]
         scores = torch.gather(preds, 1, candidates)
+
         hr, ndcg, mrr = self.evaluate_batch(scores)
         self.log("HR_test",   hr)
         self.log("NDCG_test", ndcg)
         self.log("MRR_test",  mrr)
 
     def configure_optimizers(self):
-        # ✅ 실제 파라미터명과 일치하도록 수정
         no_decay = ['bias', 'layer_norm.weight', 'layer_norm.bias']
 
         params = [
@@ -99,9 +111,12 @@ class BERT4REC(pl.LightningModule):
                 'weight_decay': 0.0
             }
         ]
+
         optimizer = torch.optim.Adam(params, lr=self.learning_rate)
         scheduler = torch.optim.lr_scheduler.StepLR(
-            optimizer, step_size=self.decay_step, gamma=self.gamma
+            optimizer,
+            step_size=self.decay_step,
+            gamma=self.gamma
         )
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
