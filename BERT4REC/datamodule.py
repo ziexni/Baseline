@@ -31,39 +31,26 @@ class DataModule(pl.LightningDataModule):
         args.item_size = self.itemnum
 
     def setup(self, stage=None):
-        """
-        Lightning에서 stage별로 dataset 생성
-        stage :
-            'fit'  : train + valid
-            'test' : test
-        """
         if stage == 'fit' or stage is None:
-            # train dataset
-            # masking 적용됨 (BERT4REC 학습용)
             self.train_dataset = MicroVideoDataset(
                 self.user_train, self.user_valid, self.user_test,
-                self.itemnum, self.max_len, self.mask_prob, mode='train'
+                self.itemnum, self.max_len, self.mask_prob,
+                mode='train'
+                # ✅ usernum 전달 안 함 — BERT4Rec은 유저 수 제한 없음
             )
-
-            # validation dataset
-            # negative sampling 기반 평가
             self.valid_dataset = MicroVideoDataset(
                 self.user_train, self.user_valid, self.user_test,
                 self.itemnum, self.max_len,
                 neg_sample_size=self.neg_sample_size,
-                mode='valid',
-                usernum=self.usernum
+                mode='valid'
             )
-        
+    
         if stage == 'test' or stage is None:
-            # test dataset
-            # validation과 동일하게 negative sampling 사용
             self.test_dataset = MicroVideoDataset(
                 self.user_train, self.user_valid, self.user_test,
                 self.itemnum, self.max_len,
                 neg_sample_size=self.neg_sample_size,
-                mode='test',
-                usernum=self.usernum
+                mode='test'
             )
 
     def train_dataloader(self):
