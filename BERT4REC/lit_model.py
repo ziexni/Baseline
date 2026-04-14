@@ -131,7 +131,7 @@ class BERT4REC(pl.LightningModule):
     def add_to_argparse(parser):
         parser.add_argument("--learning_rate", type=float, default=1e-3)
         parser.add_argument("--hidden_dim", type=int, default=128)
-        parser.add_argument("--max_len", type=int, default=50)
+        # parser.add_argument("--max_len", type=int, default=50)
         parser.add_argument("--encoder_num", type=int, default=2)
         parser.add_argument("--head_num", type=int, default=4)
         parser.add_argument("--dropout_rate", type=float, default=0.1)
