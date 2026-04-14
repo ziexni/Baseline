@@ -39,7 +39,7 @@ class BERT4REC(pl.LightningModule):
 
     def _get_scores(self, hidden):
         self.model.embedding.token_embeddings.weight[:self.item_size + 1]
-            return torch.matmul(hidden, emb_weight.T) + self.out_bias
+        return torch.matmul(hidden, emb_weight.T) + self.out_bias
 
     @staticmethod
     def evaluate_batch(scores):
