@@ -95,25 +95,38 @@ class MicroVideoDataset(Dataset):
             return self._eval_item(u)
 
     def _train_item(self, u):
-        seq = self.user_train[u]
-        tokens, labels = [], []
-
+        seq    = self.user_train[u]
+        rated  = set(self.user_train[u])
+        tokens, pos_labels, neg_labels = [], [], []
+    
         for item in seq:
             if random.random() < self.mask_prob:
                 tokens.append(self.mask_token)
-                labels.append(item)
+                pos_labels.append(item)
+                # ✅ masked 위치에 대해 negative 샘플링
+                neg = np.random.randint(1, self.itemnum + 1)
+                while neg in rated:
+                    neg = np.random.randint(1, self.itemnum + 1)
+                neg_labels.append(neg)
             else:
                 tokens.append(item)
-                labels.append(0)
-
-        tokens = tokens[-self.maxlen:]
-        labels = labels[-self.maxlen:]
-
-        pad_len = self.maxlen - len(tokens)
-        tokens  = [0] * pad_len + tokens
-        labels  = [0] * pad_len + labels
-
-        return torch.LongTensor(tokens), torch.LongTensor(labels)
+                pos_labels.append(0)   # 0 = 학습 안 함
+                neg_labels.append(0)
+    
+        tokens     = tokens[-self.maxlen:]
+        pos_labels = pos_labels[-self.maxlen:]
+        neg_labels = neg_labels[-self.maxlen:]
+    
+        pad_len    = self.maxlen - len(tokens)
+        tokens     = [0] * pad_len + tokens
+        pos_labels = [0] * pad_len + pos_labels
+        neg_labels = [0] * pad_len + neg_labels
+    
+        return (
+            torch.LongTensor(tokens),
+            torch.LongTensor(pos_labels),
+            torch.LongTensor(neg_labels)
+        )
 
     def _eval_item(self, u):
         train_seq = self.user_train.get(u, [])
