@@ -95,22 +95,31 @@ class MicroVideoDataset(Dataset):
             return self._eval_item(u)
 
     def _train_item(self, u):
-        seq    = self.user_train[u]
-        rated  = set(self.user_train[u])
+        seq   = self.user_train[u]
+        rated = set(self.user_train[u])
         tokens, pos_labels, neg_labels = [], [], []
     
         for item in seq:
-            if random.random() < self.mask_prob:
-                tokens.append(self.mask_token)
+            prob = random.random()
+            if prob < self.mask_prob:
+                # ✅ 80/10/10 규칙
+                inner = random.random()
+                if inner < 0.8:
+                    tokens.append(self.mask_token)       # 80%: MASK
+                elif inner < 0.9:
+                    tokens.append(item)                  # 10%: 원래 아이템 유지
+                else:
+                    rand_item = np.random.randint(1, self.itemnum + 1)
+                    tokens.append(rand_item)             # 10%: 랜덤 교체
+    
                 pos_labels.append(item)
-                # ✅ masked 위치에 대해 negative 샘플링
                 neg = np.random.randint(1, self.itemnum + 1)
                 while neg in rated:
                     neg = np.random.randint(1, self.itemnum + 1)
                 neg_labels.append(neg)
             else:
                 tokens.append(item)
-                pos_labels.append(0)   # 0 = 학습 안 함
+                pos_labels.append(0)
                 neg_labels.append(0)
     
         tokens     = tokens[-self.maxlen:]
@@ -127,6 +136,7 @@ class MicroVideoDataset(Dataset):
             torch.LongTensor(pos_labels),
             torch.LongTensor(neg_labels)
         )
+
 
     def _eval_item(self, u):
         train_seq = self.user_train.get(u, [])
