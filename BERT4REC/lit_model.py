@@ -5,27 +5,27 @@ import torch.nn.functional as F
 
 from bert import BERT
 
+
 class BERT4REC(pl.LightningModule):
     def __init__(self, args):
         super().__init__()
 
-        self.learning_rate = args.learning_rate
-        self.max_len = args.max_len
-        self.hidden_dim = args.hidden_dim
-        self.encoder_num = args.encoder_num
-        self.head_num = args.head_num
-        self.dropout_rate = args.dropout_rate
+        self.learning_rate     = args.learning_rate
+        self.max_len           = args.max_len
+        self.hidden_dim        = args.hidden_dim
+        self.encoder_num       = args.encoder_num
+        self.head_num          = args.head_num
+        self.dropout_rate      = args.dropout_rate
         self.dropout_rate_attn = args.dropout_rate_attn
 
         self.vocab_size = args.item_size + 2
-        self.item_size = args.item_size
+        self.item_size  = args.item_size
 
         self.weight_decay = args.weight_decay
-        self.decay_step = args.decay_step
-        self.gamma = args.gamma
-        self.batch_size = args.batch_size
+        self.decay_step   = args.decay_step
+        self.gamma        = args.gamma
+        self.batch_size   = args.batch_size
 
-        # BERT encoder
         self.model = BERT(
             vocab_size=self.vocab_size,
             max_len=self.max_len,
@@ -37,80 +37,75 @@ class BERT4REC(pl.LightningModule):
             initializer_range=args.initializer_range
         )
 
-        # output head
         self.out = nn.Linear(self.hidden_dim, self.item_size + 1)
 
+        # ✅ SASRec 맞춤: BCE loss
+        self.bce = nn.BCEWithLogitsLoss()
+
     # -------------------------
-    # LOSS (PAIRWISE RANKING)
+    # Metrics
     # -------------------------
     @staticmethod
     def evaluate_batch(scores):
-        # scores: (B, K), labels = index of positive in candidates
-        rank = scores.argsort(dim=1, descending=True).argsort(dim=1)
-        pos_rank = (rank == 0).nonzero(as_tuple=True)[1] + 1
-    
-        hr = (pos_rank <= 10).float().mean()
+        """scores: (B, 101), candidates[0] = 정답"""
+        rank     = scores.argsort(dim=1, descending=True).argsort(dim=1)
+        pos_rank = (rank == 0).nonzero(as_tuple=True)[1] + 1   # 1-based
+
+        hr   = (pos_rank <= 10).float().mean()
         ndcg = (1.0 / torch.log2(pos_rank.float() + 1)).mean()
-        mrr = (1.0 / pos_rank.float()).mean()
-    
+        mrr  = (1.0 / pos_rank.float()).mean()
         return hr, ndcg, mrr
-        
+
+    # -------------------------
+    # Training
+    # -------------------------
     def training_step(self, batch, batch_idx):
         seq, pos, neg = batch
-    
+
         logits = self.model(seq)
-        preds = self.out(logits)[:, -1, :]   # (B, item)
-    
+        preds  = self.out(logits)[:, -1, :]   # (B, item)
+
         pos_score = torch.gather(preds, 1, pos.unsqueeze(1)).squeeze(1)
         neg_score = torch.gather(preds, 1, neg.unsqueeze(1)).squeeze(1)
-    
-        loss = -F.logsigmoid(pos_score - neg_score).mean()
-    
+
+        # ✅ SASRec 맞춤: BCE
+        loss = (
+            self.bce(pos_score, torch.ones_like(pos_score)) +
+            self.bce(neg_score, torch.zeros_like(neg_score))
+        )
+
         self.log("train_loss", loss, prog_bar=True)
         return loss
 
     # -------------------------
-    # EVAL METRICS (SAME AS AMPREC)
+    # Validation / Test
     # -------------------------
     def validation_step(self, batch, batch_idx):
         seq, candidates, _ = batch
-    
-        preds = self.out(self.model(seq))[:, -1, :]
+
+        preds  = self.out(self.model(seq))[:, -1, :]
         scores = torch.gather(preds, 1, candidates)
-    
+
         hr, ndcg, mrr = self.evaluate_batch(scores)
-    
-        self.log("HR_val", hr, prog_bar=True)
+
+        self.log("HR_val",   hr,   prog_bar=True)
         self.log("NDCG_val", ndcg, prog_bar=True)
-        self.log("MRR_val", mrr, prog_bar=True)
+        self.log("MRR_val",  mrr,  prog_bar=True)
 
     def test_step(self, batch, batch_idx):
         seq, candidates, _ = batch
-    
-        preds = self.out(self.model(seq))[:, -1, :]
+
+        preds  = self.out(self.model(seq))[:, -1, :]
         scores = torch.gather(preds, 1, candidates)
-    
+
         hr, ndcg, mrr = self.evaluate_batch(scores)
-    
-        self.log("HR_test", hr)
+
+        self.log("HR_test",   hr)
         self.log("NDCG_test", ndcg)
-        self.log("MRR_test", mrr)
+        self.log("MRR_test",  mrr)
 
     # -------------------------
-    # INFERENCE
-    # -------------------------
-    def predict_step(self, batch, batch_idx):
-        seq = batch
-
-        logits = self.model(seq)
-        preds = self.out(logits)[:, -1, :]
-
-        _, topk = torch.topk(preds, 10)
-
-        return topk.cpu().numpy()
-
-    # -------------------------
-    # OPTIMIZER
+    # Optimizer
     # -------------------------
     def configure_optimizers(self):
         no_decay = ['bias', 'LayerNorm.weight']
@@ -129,23 +124,13 @@ class BERT4REC(pl.LightningModule):
         ]
 
         optimizer = torch.optim.Adam(params, lr=self.learning_rate)
-
         scheduler = torch.optim.lr_scheduler.StepLR(
-            optimizer,
-            step_size=self.decay_step,
-            gamma=self.gamma
+            optimizer, step_size=self.decay_step, gamma=self.gamma
         )
+        return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": scheduler,
-        }
-    
     @staticmethod
     def add_to_argparse(parser):
-        """
-        CLI argument 정의
-        """
         parser.add_argument("--learning_rate",     type=float, default=1e-3)
         parser.add_argument("--hidden_dim",        type=int,   default=128)
         parser.add_argument("--encoder_num",       type=int,   default=2)
