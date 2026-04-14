@@ -38,9 +38,8 @@ class BERT4REC(pl.LightningModule):
         self.out_bias = nn.Parameter(torch.zeros(self.item_size + 1))
 
     def _get_scores(self, hidden):
-        """Weight tying: hidden @ token_emb.T + bias"""
-        emb_weight = self.model.embedding.token_embeddings.weight[:self.item_size + 1]
-        return torch.matmul(hidden, emb_weight.T) + self.out_bias
+        self.model.embedding.token_embeddings.weight[:self.item_size + 1]
+            return torch.matmul(hidden, emb_weight.T) + self.out_bias
 
     @staticmethod
     def evaluate_batch(scores):
