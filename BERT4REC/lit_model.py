@@ -71,8 +71,8 @@ class BERT4REC(pl.LightningModule):
             ignore_index=0                         # pad/non-masked 위치 무시
         )
 
-    self.log("train_loss", loss, prog_bar=True)
-    return loss
+        self.log("train_loss", loss, prog_bar=True)
+        return loss
 
 
     def validation_step(self, batch, batch_idx):
