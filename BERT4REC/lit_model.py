@@ -1,145 +1,405 @@
-import torch
-import torch.nn as nn
-import pytorch_lightning as pl
+import pytorch_lightning as pl # 모델 + 학습 로직 관리
+
 from torchmetrics import RetrievalHitRate, RetrievalNormalizedDCG, RetrievalMRR
 
-# 참고: BERT 클래스는 외부에서 정의되어 있다고 가정합니다.
-# from bert import BERT 
+import torch
+
+import torch.nn as nn
+
+import numpy as np
+
+
+
+from bert import BERT
+
+
 
 class BERT4REC(pl.LightningModule):
+
     def __init__(self, args):
+
         super(BERT4REC, self).__init__()
 
-        # 하이퍼파라미터 설정
-        self.save_hyperparameters(args)
-        self.learning_rate = args.learning_rate
-        self.item_size = args.item_size
-        self.batch_size = args.batch_size
-        
-        # vocab: 0(PAD), 1~item_size(Items), item_size+1(MASK)
+
+
+        # 기본 하이퍼파라미터
+
+        self.learning_rate = args.learning_rate         # optimizer learning rate
+
+        self.max_len = args.max_len                      # sequence 길이
+
+        self.hidden_dim = args.hidden_dim               # transformer hidden_dimension
+
+        self.encoder_num = args.encoder_num             # transformer layer 수
+
+        self.head_num = args.head_num                   # multi-head attention head 수
+
+        self.dropout_rate = args.dropout_rate           # FFN dropout
+
+        self.dropout_rate_attn = args.dropout_rate_attn # attention dropout
+
+
+
+        # vocab 구성 (0: PAD / 1 ~ itemsize: 실제 item / item_size + 1: MASK token)
+
         self.vocab_size = args.item_size + 2
 
-        # BERT 모델 초기화
-        # self.model = BERT(...) 
-        # 예시 구조 (실제 구현체에 맞춰 수정 필요)
+
+
+        self.initializer_range= args.initializer_range  # weight init 범위
+
+        self.weight_decay = args.weight_decay           # L2 regularization
+
+        self.decay_step = args.decay_step               # Lr scheduler step
+
+        self.gamma = args.gamma                         # lr 감소 비율
+
+
+
+        # BERT encoder : sequence -> contextualized embedding 생성
+
         self.model = BERT(
-            vocab_size=self.vocab_size,
-            max_len=args.max_len,
-            hidden_dim=args.hidden_dim,
-            encoder_num=args.encoder_num,
-            head_num=args.head_num,
-            dropout_rate=args.dropout_rate,
-            dropout_rate_attn=args.dropout_rate_attn,
-            initializer_range=args.initializer_range
+
+            vocab_size = self.vocab_size,
+
+            max_len = self.max_len,
+
+            hidden_dim = self.hidden_dim,
+
+            encoder_num = self.encoder_num,
+
+            head_num = self.head_num,
+
+            dropout_rate = self.dropout_rate,
+
+            dropout_rate_attn = self.dropout_rate_attn,
+
+            initializer_range = self.initializer_range
+
         )
 
-        # Output Layer: (B, T, Hidden) -> (B, T, item_size + 1) 
-        # 0번(PAD)을 포함한 아이템 점수 계산
-        self.out = nn.Linear(args.hidden_dim, args.item_size + 1)
 
-        # Loss: PAD(0)는 제외
+
+        # output head : (B, T, hidden_dim) -> (B, T, item_size + 1)
+
+        self.out = nn.Linear(self.hidden_dim, args.item_size + 1)
+
+
+
+        self.batch_size = args.batch_size
+
+
+
+        # loss (ignore_index = 0 -> PAD는 loss 계산에서 제외)
+
         self.criterion = nn.CrossEntropyLoss(ignore_index=0)
 
-        # 평가 Metric (Top-10 기준)
-        # Retrieval 계열 메트릭은 (preds, target, indexes) 형태를 받습니다.
-        self.hr_10 = RetrievalHitRate(top_k=10)
-        self.ndcg_10 = RetrievalNormalizedDCG(top_k=10)
-        self.mrr = RetrievalMRR()
 
-    def forward(self, seq):
-        logits = self.model(seq)
-        return self.out(logits)
+
+        # 평가 metric
+
+        self.HR   = RetrievalHitRate(top_k=10)
+
+        self.NDCG = RetrievalNormalizedDCG(top_k=10)
+
+        self.MRR  = RetrievalMRR()     
+
+
 
     def training_step(self, batch, batch_idx):
-        seq, labels = batch # labels: (B, T) - MASK된 위치만 아이템ID, 나머지는 0
-        
-        preds = self(seq) # (B, T, item_size + 1)
-        
-        # CrossEntropy를 위해 shape 변경: (B, C, T)
+
+        """
+
+        BERT4REC 학습 단계
+
+
+
+        batch:
+
+            seq : input sequence (mask 포함)
+
+            labels : 정답 item (mask 위치만 값 있음, 나머지는 0)
+
+        """
+
+
+
+        seq, labels = batch
+
+
+
+        logits = self.model(seq)  # (B, T, hidden)
+
+        preds = self.out(logits)  # (B, T, item_size + 1)
+
+
+
+        # CrossEntropyLoss 입력 형태 맞추기 위해 transpose
+
         loss = self.criterion(preds.transpose(1, 2), labels)
-        
-        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
-        return loss
 
-    def _shared_eval_step(self, batch, batch_idx, phase):
-        """
-        Validation과 Test에서 공통으로 사용하는 101 후보군 평가 로직
-        batch 구성:
-            - seq: 입력 시퀀스 (B, T)
-            - candidates: [정답 아이템, Neg 1, ..., Neg 100] (B, 101)
-            - labels: [1, 0, ..., 0] (B, 101) - 첫 번째가 정답임을 나타내는 binary
-        """
-        seq, candidates, labels = batch
-        batch_size = seq.size(0)
 
-        # 1. 모델 예측 (마지막 타임스텝의 결과만 사용 - Leave-one-out 기반)
-        logits = self(seq)
-        preds_at_last = logits[:, -1, :] # (B, item_size + 1)
-
-        # 2. 101개 후보군에 대해서만 점수 추출 (Candidate Ordering 유지)
-        # candidates의 각 행에 해당하는 아이템의 확률값만 가져옴
-        candidate_scores = torch.gather(preds_at_last, 1, candidates) # (B, 101)
-
-        # 3. Retrieval Metrics를 위한 indexes 생성
-        # 각 유저(샘플)마다 독립된 랭킹을 계산하기 위해 고유 index 부여
-        step_offset = batch_idx * self.batch_size
-        indexes = torch.arange(
-            step_offset, step_offset + batch_size, 
-            device=self.device
-        ).unsqueeze(1).expand_as(candidate_scores)
-
-        # 4. Metric 계산
-        # labels는 해당 아이템이 정답인지 여부(bool/int)
-        hr = self.hr_10(candidate_scores, labels, indexes=indexes)
-        ndcg = self.ndcg_10(candidate_scores, labels, indexes=indexes)
-        mrr = self.mrr(candidate_scores, labels, indexes=indexes)
 
         # 로그 기록
-        self.log(f"{phase}_HR@10", hr, on_epoch=True, prog_bar=True)
-        self.log(f"{phase}_NDCG@10", ndcg, on_epoch=True, prog_bar=True)
-        self.log(f"{phase}_MRR", mrr, on_epoch=True, prog_bar=True)
 
-        return hr
+        self.log("train_loss", loss,
+
+                 on_step=True, on_epoch=True,
+
+                 prog_bar=True, logger=True)
+
+    
+
+        return loss
+
+    
 
     def validation_step(self, batch, batch_idx):
-        return self._shared_eval_step(batch, batch_idx, "val")
+
+        """
+
+        validation 단계 (ranking 기반 평가)
+
+
+
+        batch:
+
+            seq : input sequence
+
+            candidate : [정답 + negative items] (B, 101)
+
+            labels : 정답 위치 (one-hot 형태)
+
+        """
+
+        seq, candidates, labels = batch
+
+
+
+        logits = self.model(seq)
+
+        preds = self.out(logits)
+
+
+
+        # 마지막 위치 prediction : BERT4REC은 마지막 mask 위치만 평가
+
+        preds = preds[:, -1, :] # (B, item_size + 1)
+
+        
+
+        # 정답 item id
+
+        targets = candidates[:, 0]
+
+
+
+        # classification loss (참고용)
+
+        loss = self.criterion(preds, targets)
+
+
+
+        # candidate subset score 추출
+
+        recs = torch.gather(preds, 1, candidates)
+
+
+
+        # metrics 계산용 index 생성
+
+        steps = batch_idx * self.batch_size
+
+        indexes = torch.arange(
+
+            steps, steps + seq.size(0),
+
+            dtype=torch.long,
+
+            device=seq.device
+
+        ).unsqueeze(1).repeat(1, 101)
+
+
+
+                # ===== logging =====
+
+        self.log("val_loss", loss,
+
+                 on_step=False, on_epoch=True, prog_bar=True, logger=True)
+
+
+
+        self.log("HR_val",
+
+                 self.HR(recs, labels, indexes),
+
+                 on_step=False, on_epoch=True, prog_bar=True, logger=True)
+
+
+
+        self.log("NDCG_val",
+
+                 self.NDCG(recs, labels, indexes),
+
+                 on_step=False, on_epoch=True, prog_bar=True, logger=True)
+
+        
+
+        self.log("MRR_val",
+
+                 self.MRR(recs, labels, indexes),
+
+                 on_step=False, on_epoch=True, prog_bar=True, logger=True)
+
+        
 
     def test_step(self, batch, batch_idx):
-        return self._shared_eval_step(batch, batch_idx, "test")
+
+        """
+
+        test 단계 (validation과 동일 구조)
+
+        """
+
+        seq, candidates, labels = batch
+
+
+
+        logits = self.model(seq)
+
+        preds  = self.out(logits)
+
+
+
+        preds   = preds[:, -1, :]
+
+        targets = candidates[:, 0]
+
+        loss    = self.criterion(preds, targets)
+
+
+
+        recs = torch.gather(preds, 1, candidates)
+
+
+
+        steps   = batch_idx * self.batch_size
+
+        indexes = torch.arange(
+
+            steps, steps + seq.size(0),
+
+            dtype=torch.long,
+
+            device=seq.device
+
+        ).unsqueeze(1).repeat(1, 101)
+
+
+
+        self.log("test_loss", loss,
+
+                 on_step=False, on_epoch=True, prog_bar=True, logger=True)
+
+
+
+        self.log("HR_test",
+
+                 self.HR(recs, labels, indexes),
+
+                 on_step=False, on_epoch=True, prog_bar=True, logger=True)
+
+
+
+        self.log("NDCG_test",
+
+                 self.NDCG(recs, labels, indexes),
+
+                 on_step=False, on_epoch=True, prog_bar=True, logger=True)
+
+        
+
+        self.log("MRR_test",
+
+                 self.MRR(recs, labels, indexes),
+
+                 on_step=False, on_epoch=True, prog_bar=True, logger=True)
+
+        
+
+    def predict_step(self, batch, batch_idx, dataloader_idx=0):
+
+        """
+
+        inference (추천 결과 생성)
+
+
+
+        입력 : seq
+
+        출력 : top-10 item index
+
+        """
+
+        seq = batch
+
+
+
+        logits = self.model(seq)
+
+        preds = self.out(logits)
+
+
+
+        preds = preds[:, -1, :] # 마지막 step 기준 추천
+
+
+
+        # top-10 추천
+
+        indexes, _ = torch.topk(preds, 10)
+
+
+
+        return indexes.cpu().numpy()
+
+    
 
     def configure_optimizers(self):
-        # Weight Decay 적용 범위 설정
-        no_decay = ["bias", "LayerNorm.weight"]
-        optimizer_grouped_parameters = [
-            {
-                "params": [p for n, p in self.named_parameters() if not any(nd in n for nd in no_decay)],
-                "weight_decay": self.hparams.weight_decay,
-            },
-            {
-                "params": [p for n, p in self.named_parameters() if any(nd in n for nd in no_decay)],
-                "weight_decay": 0.0,
-            },
-        ]
-        
-        optimizer = torch.optim.Adam(optimizer_grouped_parameters, lr=self.learning_rate)
-        scheduler = torch.optim.lr_scheduler.StepLR(
-            optimizer, step_size=self.hparams.decay_step, gamma=self.hparams.gamma
-        )
-        return [optimizer], [scheduler]
 
-    @staticmethod
-    def add_to_argparse(parser):
-        parser.add_argument("--learning_rate", type=float, default=1e-3)
-        parser.add_argument("--hidden_dim", type=int, default=128)
-        # parser.add_argument("--max_len", type=int, default=50)
-        parser.add_argument("--encoder_num", type=int, default=2)
-        parser.add_argument("--head_num", type=int, default=4)
-        parser.add_argument("--dropout_rate", type=float, default=0.1)
-        parser.add_argument("--dropout_rate_attn", type=float, default=0.1)
-        parser.add_argument("--initializer_range", type=float, default=0.02)
-        parser.add_argument("--weight_decay", type=float, default=0.01)
-        parser.add_argument("--decay_step", type=int, default=25)
-        parser.add_argument("--gamma", type=float, default=0.1)
-        parser.add_argument("--item_size", type=int, required=True)
-        parser.add_argument("--batch_size", type=int, default=128)
-        return parser
+        """
+
+        optimizer + scheduler 설정
+
+        """
+
+        # weight decay 적응 분리
+
+        no_decay = ['bias', 'LayerNorm.weight']
+
+
+
+        params = [
+
+            {
+
+                'params' : [p for n, p in self.named_parameters()
+
+                            if not any(nd in n for nd in no_decay)],
+
+                'weight_decay' : self.weight_decay
+
+            },
+
+            {
+
+                'params' : [p for n, p in self.named_parameters()
+
+                            if any(nd in n for nd in no_decay)],
+
+                'weight_decay' : 0.0
+
+            }
+
+        ]
