@@ -11,7 +11,7 @@ class BERTEmbeddings(nn.Module):
         super().__init__()
         self.token_embeddings      = nn.Embedding(vocab_size, embed_size, padding_idx=0)
         self.positional_embeddings = nn.Embedding(max_len, embed_size)
-        self.layer_norm            = nn.LayerNorm(embed_size, eps=1e-6)
+        self.layer_norm            = nn.LayerNorm(embed_size, eps=1e-12)
         self.dropout               = nn.Dropout(p=dropout_rate)
 
     def forward(self, seq: torch.Tensor,
@@ -19,8 +19,8 @@ class BERTEmbeddings(nn.Module):
         batch_size, seq_length = seq.size()
         position_ids = torch.arange(seq_length, device=seq.device)
         position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_length)
-
-        embeddings = self.token_embeddings(seq) + self.positional_embeddings(position_ids)
+        embeddings   = (self.token_embeddings(seq)
+                        + self.positional_embeddings(position_ids))
         return self.dropout(self.layer_norm(embeddings))
 
 
@@ -28,41 +28,30 @@ class MultiHeadedAttention(nn.Module):
     def __init__(self, head_num, hidden_dim, dropout_rate_attn=0.1):
         super().__init__()
         assert hidden_dim % head_num == 0
-        self.hidden_dim   = hidden_dim
-        self.head_num     = head_num
-        self.head_dim     = hidden_dim // head_num
-        self.query_linear = nn.Linear(hidden_dim, hidden_dim)
-        self.key_linear   = nn.Linear(hidden_dim, hidden_dim)
-        self.value_linear = nn.Linear(hidden_dim, hidden_dim)
-        self.scale        = math.sqrt(self.head_dim)
-        self.dropout      = nn.Dropout(p=dropout_rate_attn)
+        self.hidden_dim    = hidden_dim
+        self.head_num      = head_num
+        self.head_dim      = hidden_dim // head_num
+        self.query_linear  = nn.Linear(hidden_dim, hidden_dim)
+        self.key_linear    = nn.Linear(hidden_dim, hidden_dim)
+        self.value_linear  = nn.Linear(hidden_dim, hidden_dim)
+        self.scale         = math.sqrt(self.head_dim)
+        self.dropout       = nn.Dropout(p=dropout_rate_attn)
         self.output_linear = nn.Linear(hidden_dim, hidden_dim)
 
     def forward(self, q, k, v, mask=None):
         B = q.size(0)
-        query = self.query_linear(q).view(B, -1, self.head_num, self.head_dim).permute(0,2,1,3)
-        key   = self.key_linear(k).view(B, -1, self.head_num, self.head_dim).permute(0,2,1,3)
-        value = self.value_linear(v).view(B, -1, self.head_num, self.head_dim).permute(0,2,1,3)
+        query = self.query_linear(q).view(B,-1,self.head_num,self.head_dim).permute(0,2,1,3)
+        key   = self.key_linear(k).view(B,-1,self.head_num,self.head_dim).permute(0,2,1,3)
+        value = self.value_linear(v).view(B,-1,self.head_num,self.head_dim).permute(0,2,1,3)
 
-        scores = torch.matmul(query, key.transpose(-1, -2)) / self.scale
+        scores = torch.matmul(query, key.transpose(-1,-2)) / self.scale
         if mask is not None:
             scores = scores.masked_fill(mask == 0, -1e9)
 
         attention = self.dropout(F.softmax(scores, dim=-1))
         out = torch.matmul(attention, value)
-        out = out.permute(0,2,1,3).contiguous().view(B, -1, self.hidden_dim)
-        return self.output_linear(out), attention
-
-
-class SublayerConnection(nn.Module):
-    def __init__(self, hidden_dim: int, dropout_rate: float = 0.1):
-        super().__init__()
-        self.layer_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
-        self.dropout    = nn.Dropout(p=dropout_rate)
-
-    def forward(self, x, sublayer_out):
-        # Post-LN: LayerNorm(x + dropout(sublayer_out))
-        return self.layer_norm(x + self.dropout(sublayer_out))
+        out = out.permute(0,2,1,3).contiguous().view(B,-1,self.hidden_dim)
+        return self.output_linear(out)
 
 
 class PositionwiseFeedForward(nn.Module):
@@ -78,32 +67,28 @@ class PositionwiseFeedForward(nn.Module):
 
 
 class TransformerEncoder(nn.Module):
+    """
+    ✅ 원본 레포와 동일한 Pre-LN 방식
+    x = x + Attention(LayerNorm(x))
+    x = x + FFN(LayerNorm(x))
+    """
     def __init__(self, hidden_dim, head_num, ff_dim,
                  dropout_rate=0.1, dropout_rate_attn=0.1):
         super().__init__()
-        self.attention       = MultiHeadedAttention(head_num, hidden_dim, dropout_rate_attn)
-        self.input_sublayer  = SublayerConnection(hidden_dim, dropout_rate)
-        self.feed_forward    = PositionwiseFeedForward(hidden_dim, ff_dim, dropout_rate)
-        self.output_sublayer = SublayerConnection(hidden_dim, dropout_rate)
-        # ✅ 이중 dropout 제거 — self.dropout 삭제
+        self.attention  = MultiHeadedAttention(head_num, hidden_dim, dropout_rate_attn)
+        self.ffn        = PositionwiseFeedForward(hidden_dim, ff_dim, dropout_rate)
+        self.attn_norm  = nn.LayerNorm(hidden_dim, eps=1e-12)   # Pre-LN: attn 전
+        self.ffn_norm   = nn.LayerNorm(hidden_dim, eps=1e-12)   # Pre-LN: ffn 전
+        self.dropout    = nn.Dropout(p=dropout_rate)
 
     def forward(self, x, mask):
-        attn_out, _ = self.attention(x, x, x, mask)
-        x = self.input_sublayer(x, attn_out)
-        x = self.output_sublayer(x, self.feed_forward(x))
-        return x   # ✅ extra dropout 제거
-
-
-# ✅ Output Head: dense + GELU + LayerNorm (BERT 원본 구조)
-class OutputHead(nn.Module):
-    def __init__(self, hidden_dim: int):
-        super().__init__()
-        self.dense      = nn.Linear(hidden_dim, hidden_dim)
-        self.activation = nn.GELU()
-        self.layer_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
-
-    def forward(self, x):
-        return self.layer_norm(self.activation(self.dense(x)))
+        # ✅ Pre-LN attention
+        x = x + self.dropout(self.attention(self.attn_norm(x),
+                                            self.attn_norm(x),
+                                            self.attn_norm(x), mask))
+        # ✅ Pre-LN FFN
+        x = x + self.dropout(self.ffn(self.ffn_norm(x)))
+        return x
 
 
 class BERT(nn.Module):
@@ -119,8 +104,6 @@ class BERT(nn.Module):
                                dropout_rate, dropout_rate_attn)
             for _ in range(encoder_num)
         ])
-        # ✅ output head 추가
-        self.output_head = OutputHead(hidden_dim)
 
         self.initializer_range = initializer_range
         self.apply(self._init_weights)
@@ -135,9 +118,8 @@ class BERT(nn.Module):
             module.bias.data.zero_()
 
     def forward(self, seq, segment_info=None):
-        mask = (seq > 0).unsqueeze(1).unsqueeze(1)
+        mask = (seq > 0).unsqueeze(1).unsqueeze(1)   # (B, 1, 1, T)
         x    = self.embedding(seq, segment_info)
         for transformer in self.transformers:
             x = transformer(x, mask)
-        # ✅ output head 적용
-        return self.output_head(x)
+        return x   # ✅ output head 제거 — weight tying이 직접 처리
