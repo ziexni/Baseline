@@ -1,18 +1,9 @@
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from bert import BERT
-
-def evaluate_batch(scores):
-    rank = scores.argsort(dim=1, descending=True).argsort(dim=1)[:, 0]
-
-    hr = (rank < 10).float().mean()
-    ndcg = (1.0 / torch.log2(rank.float() + 2)).mean()
-    mrr = (1.0 / (rank.float() + 1)).mean()
-
-    return hr, ndcg, mrr
-
 
 class BERT4REC(pl.LightningModule):
     def __init__(self, args):
@@ -52,19 +43,29 @@ class BERT4REC(pl.LightningModule):
     # -------------------------
     # LOSS (PAIRWISE RANKING)
     # -------------------------
+    @staticmethod
+    def evaluate_batch(scores):
+        # scores: (B, K), labels = index of positive in candidates
+        rank = scores.argsort(dim=1, descending=True).argsort(dim=1)
+        pos_rank = (rank == 0).nonzero(as_tuple=True)[1] + 1
+    
+        hr = (pos_rank <= 10).float().mean()
+        ndcg = (1.0 / torch.log2(pos_rank.float() + 1)).mean()
+        mrr = (1.0 / pos_rank.float()).mean()
+    
+        return hr, ndcg, mrr
+        
     def training_step(self, batch, batch_idx):
-        seq, candidates, labels = batch
-
+        seq, pos, neg = batch
+    
         logits = self.model(seq)
-        preds = self.out(logits)[:, -1, :]  # (B, item_size+1)
-
-        scores = torch.gather(preds, 1, candidates)  # (B, 101)
-
-        pos = scores[:, 0]
-        neg = scores[:, 1:]
-
-        loss = -torch.log(torch.sigmoid(pos.unsqueeze(1) - neg)).mean()
-
+        preds = self.out(logits)[:, -1, :]   # (B, item)
+    
+        pos_score = torch.gather(preds, 1, pos.unsqueeze(1)).squeeze(1)
+        neg_score = torch.gather(preds, 1, neg.unsqueeze(1)).squeeze(1)
+    
+        loss = -F.logsigmoid(pos_score - neg_score).mean()
+    
         self.log("train_loss", loss, prog_bar=True)
         return loss
 
@@ -72,7 +73,7 @@ class BERT4REC(pl.LightningModule):
     # EVAL METRICS (SAME AS AMPREC)
     # -------------------------
     def validation_step(self, batch, batch_idx):
-        seq, candidates, labels = batch
+        seq, candidates, _ = batch
     
         preds = self.out(self.model(seq))[:, -1, :]
         scores = torch.gather(preds, 1, candidates)
@@ -84,7 +85,7 @@ class BERT4REC(pl.LightningModule):
         self.log("MRR_val", mrr, prog_bar=True)
 
     def test_step(self, batch, batch_idx):
-        seq, candidates, labels = batch
+        seq, candidates, _ = batch
     
         preds = self.out(self.model(seq))[:, -1, :]
         scores = torch.gather(preds, 1, candidates)
