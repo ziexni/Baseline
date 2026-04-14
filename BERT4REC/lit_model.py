@@ -58,21 +58,22 @@ class BERT4REC(pl.LightningModule):
         return hr, ndcg, mrr
 
     def training_step(self, batch, batch_idx):
-        seq, pos, neg = batch
-
+        seq, pos, neg = batch   # neg는 이제 사용 안 함
+    
         hidden = self.model(seq)           # (B, T, hidden)
         preds  = self._get_scores(hidden)  # (B, T, item_size+1)
-
-        indices   = torch.where(pos != 0)
-        pos_score = preds[indices[0], indices[1], pos[indices]]
-        neg_score = preds[indices[0], indices[1], neg[indices]]
-
-        loss = (
-            self.bce(pos_score, torch.ones_like(pos_score)) +
-            self.bce(neg_score, torch.zeros_like(neg_score))
+    
+        # ✅ 원본 BERT4Rec: Cross-Entropy over full vocab
+        # pos: (B, T) — masked 위치는 item_id, 나머지는 0 (ignore)
+        loss = F.cross_entropy(
+            preds.view(-1, self.item_size + 1),   # (B*T, vocab)
+            pos.view(-1),                          # (B*T,)
+            ignore_index=0                         # pad/non-masked 위치 무시
         )
-        self.log("train_loss", loss, prog_bar=True)
-        return loss
+
+    self.log("train_loss", loss, prog_bar=True)
+    return loss
+
 
     def validation_step(self, batch, batch_idx):
         seq, candidates, _ = batch
