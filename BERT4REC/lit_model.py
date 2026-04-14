@@ -60,22 +60,27 @@ class BERT4REC(pl.LightningModule):
     # Training
     # -------------------------
     def training_step(self, batch, batch_idx):
-        seq, pos, neg = batch
-
-        logits = self.model(seq)
-        preds  = self.out(logits)[:, -1, :]   # (B, item)
-
-        pos_score = torch.gather(preds, 1, pos.unsqueeze(1)).squeeze(1)
-        neg_score = torch.gather(preds, 1, neg.unsqueeze(1)).squeeze(1)
-
-        # ✅ SASRec 맞춤: BCE
+        seq, pos, neg = batch   # (B, T) each
+    
+        logits = self.model(seq)          # (B, T, hidden)
+        preds  = self.out(logits)         # (B, T, vocab)
+    
+        # masked 위치만 loss 계산 (pos != 0인 위치)
+        indices = torch.where(pos != 0)   # (row_idx, col_idx)
+    
+        # pos/neg score: masked 위치의 아이템 score 추출
+        pos_score = preds[indices[0], indices[1], pos[indices]]    # (M,)
+        neg_score = preds[indices[0], indices[1], neg[indices]]    # (M,)
+    
+        # ✅ BCE (SASRec 동일)
         loss = (
             self.bce(pos_score, torch.ones_like(pos_score)) +
             self.bce(neg_score, torch.zeros_like(neg_score))
         )
-
+    
         self.log("train_loss", loss, prog_bar=True)
         return loss
+
 
     # -------------------------
     # Validation / Test
