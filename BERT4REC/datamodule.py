@@ -116,6 +116,9 @@ class DataModule(pl.LightningDataModule):
         parser.add_argument('--pin_memory',      type=bool,  default=True)  # GPU 최적화
         parser.add_argument('--num_workers',     type=int,   default=4)     # dataloader worker
         parser.add_argument('--item_size',       type=int,   default=0)     # item vocab size (나중에 덮어씀)
-        parser.add_argument('--interaction_path', type=str,  default=INTERACTION_PATH) # 데이터 경로
+        parser.add_argument(
+            '--interaction_path',
+            default='/kaggle/input/datasets/jieunl2/kuaishou/kuaishou_preprocess.pkl'
+        ) # 데이터 경로
 
         return parser
