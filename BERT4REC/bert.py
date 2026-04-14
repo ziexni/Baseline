@@ -99,18 +99,14 @@ class MultiHeadedAttention(nn.Module):
         return self.output_linear(out), attention
     
 class SublayerConnection(nn.Module):
-    """
-    Residual + LayerNorm + Dropout
-    """
-
     def __init__(self, hidden_dim: int, dropout_rate: float = 0.1):
-        super(SublayerConnection, self).__init__()
+        super().__init__()
         self.layer_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
-        self.dropout = nn.Dropout(p=dropout_rate)
+        self.dropout    = nn.Dropout(p=dropout_rate)
 
     def forward(self, x, sublayer_out):
-        # residual connection
-        return x + self.dropout(self.layer_norm(sublayer_out))
+        # ✅ 표준 Post-LN: LayerNorm(x + dropout(sublayer_out))
+        return self.layer_norm(x + self.dropout(sublayer_out))
     
 class PositionwiseFeedForward(nn.Module):
     """
