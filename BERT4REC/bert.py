@@ -96,7 +96,8 @@ class BERT(nn.Module):
                  encoder_num=12, head_num=12, dropout_rate=0.1,
                  dropout_rate_attn=0.1, initializer_range=0.02):
         super().__init__()
-        self.ff_dim = hidden_dim * 4
+        self.hidden   = hidden_dim   # ✅ BERTModel에서 참조용
+        self.ff_dim   = hidden_dim * 4
 
         self.embedding    = BERTEmbeddings(vocab_size, hidden_dim, max_len, dropout_rate)
         self.transformers = nn.ModuleList([
@@ -104,6 +105,7 @@ class BERT(nn.Module):
                                dropout_rate, dropout_rate_attn)
             for _ in range(encoder_num)
         ])
+        # ✅ output_head 없음 — 원본과 동일
 
         self.initializer_range = initializer_range
         self.apply(self._init_weights)
@@ -118,8 +120,9 @@ class BERT(nn.Module):
             module.bias.data.zero_()
 
     def forward(self, seq, segment_info=None):
-        mask = (seq > 0).unsqueeze(1).unsqueeze(1)   # (B, 1, 1, T)
+        mask = (seq > 0).unsqueeze(1).unsqueeze(1)
         x    = self.embedding(seq, segment_info)
         for transformer in self.transformers:
             x = transformer(x, mask)
-        return x   # ✅ output head 제거 — weight tying이 직접 처리
+        return x   # (B, T, hidden) — output head 없이 반환
+
